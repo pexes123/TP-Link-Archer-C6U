@@ -707,7 +707,7 @@ class TplinkC1200Router(TplinkBaseRouter):
             raise ClientException(error)
 
 
-class TPLinkMRClient(AbstractRouter):
+class TPLinkCGIClient(AbstractRouter):
     REQUEST_RETRIES = 3
 
     HEADERS = {
@@ -716,10 +716,14 @@ class TPLinkMRClient(AbstractRouter):
         'Referer': 'http://192.168.1.1/'  # updated on the fly
     }
 
+    ACT_PROXY_URL = 'cgi'
+    ENCRYPT_ACT = False
+    ROUTER_CLASS = 'CGI'
+
     HTTP_RET_OK = 0
     HTTP_ERR_CGI_INVALID_ANSI = 71017
-    HTTP_ERR_USER_PWD_NOT_CORRECT = 71233
-    HTTP_ERR_USER_BAD_REQUEST = 71234
+    # HTTP_ERR_USER_PWD_NOT_CORRECT = 71233
+    # HTTP_ERR_USER_BAD_REQUEST = 71234
 
     CLIENT_TYPES = {
         0: Connection.WIRED,
@@ -755,18 +759,18 @@ class TPLinkMRClient(AbstractRouter):
             self.attrs = attrs
 
     def __init__(self, host: str, password: str, username: str = 'admin', logger: Logger = None,
-                 verify_ssl: bool = True, timeout: int = 30) -> None:
+                 verify_ssl: bool = False, timeout: int = 30) -> None:
         super().__init__(host, password, username, logger, verify_ssl, timeout)
 
         self.req = requests.Session()
         self._token = None
-        self._hash = hashlib.md5((self.username + self.password).encode()).hexdigest()
-        self._nn = None
-        self._ee = None
-        self._seq = None
-
-        self._encryption = EncryptionWrapperMR()
-
+    #     self._hash = hashlib.md5((self.username + self.password).encode()).hexdigest()
+    #     self._nn = None
+    #     self._ee = None
+    #     self._seq = None
+    #
+    #     self._encryption = EncryptionWrapperMR()
+    #
     def supports(self) -> bool:
         try:
             self._req_rsa_key()
@@ -780,14 +784,14 @@ class TPLinkMRClient(AbstractRouter):
         '''
         # hash the password
 
-        # request the RSA public key from the host
-        self._nn, self._ee, self._seq = self._req_rsa_key()
-
-        # authenticate
-        self._req_login()
-
-        # request TokenID
-        self._token = self._req_token()
+        # # request the RSA public key from the host
+        # self._nn, self._ee, self._seq = self._req_rsa_key()
+        #
+        # # authenticate
+        # self._req_login()
+        #
+        # # request TokenID
+        # self._token = self._req_token()
 
     def logout(self) -> None:
         '''
@@ -982,16 +986,16 @@ class TPLinkMRClient(AbstractRouter):
         ]
         self.req_act(acts)
 
-    def send_sms(self, phone_number: str, message: str) -> None:
-        acts = [
-            self.ActItem(
-                self.ActItem.SET, 'LTE_SMS_SENDNEWMSG', attrs=[
-                    'index=1',
-                    'to={}'.format(phone_number),
-                    'textContent={}'.format(message),
-                ]),
-        ]
-        self.req_act(acts)
+    # def send_sms(self, phone_number: str, message: str) -> None:
+    #     acts = [
+    #         self.ActItem(
+    #             self.ActItem.SET, 'LTE_SMS_SENDNEWMSG', attrs=[
+    #                 'index=1',
+    #                 'to={}'.format(phone_number),
+    #                 'textContent={}'.format(message),
+    #             ]),
+    #     ]
+    #     self.req_act(acts)
 
     def reboot(self) -> None:
         acts = [
@@ -1001,7 +1005,7 @@ class TPLinkMRClient(AbstractRouter):
 
     def req_act(self, acts: list):
         '''
-        Requests ACTs via the cgi_gdpr proxy
+        Requests ACTs via the ACT_PROXY_URL cgi proxy
         '''
         act_types = []
         act_data = []
@@ -1017,13 +1021,13 @@ class TPLinkMRClient(AbstractRouter):
                 '\r\n'.join(act.attrs)
             ))
 
-        data = '&'.join(act_types) + '\r\n' + ''.join(act_data)
+        data = ''.join(act_data)
 
-        url = self._get_url('cgi_gdpr')
-        (code, response) = self._request(url, data_str=data, encrypt=True)
+        url = self._get_url(self.ACT_PROXY_URL, act_types)
+        (code, response) = self._request(url, data_str=data, encrypt=self.ENCRYPT_ACT)
 
         if code != 200:
-            error = 'TplinkRouter - MR -  Response with error; Request {} - Response {}'.format(data, response)
+            error = 'TplinkRouter - {} -  Response with error; Request {} - Response {}'.format(self.ROUTER_CLASS, data, response)
             if self._logger:
                 self._logger.error(error)
             raise ClientError(error)
@@ -1046,7 +1050,7 @@ class TPLinkMRClient(AbstractRouter):
         lines = response.split('\n')
         for l in lines:
             if l.startswith('['):
-                regexp = re.search('\[\d,\d,\d,\d,\d,\d\](\d)', l)
+                regexp = re.search('\[\d,\d+,\d,\d,\d,\d\](\d)', l)
                 if regexp is not None:
                     obj = {}
                     index = regexp.group(1)
@@ -1066,24 +1070,16 @@ class TPLinkMRClient(AbstractRouter):
 
         return result if result else []
 
-    def _get_url(self, endpoint: str, params: dict = {}, include_ts: bool = True) -> str:
-        # add timestamp param
-        if include_ts:
-            params['_'] = str(round(time.time() * 1000))
-
-        # format params into a string
-        params_arr = []
-        for attr, value in params.items():
-            params_arr.append('{}={}'.format(attr, value))
-
+    def _get_url(self, endpoint: str, params: list = []) -> str:
         # format url
         return '{}/{}{}{}'.format(
             self.host,
             endpoint,
-            '?' if len(params_arr) > 0 else '',
-            '&'.join(params_arr)
+            '?' if len(params) > 0 else '',
+            '&'.join(params)
         )
 
+    """
     def _req_token(self):
         '''
         Requests the TokenID, used for CGI authentication (together with cookies)
@@ -1103,7 +1099,7 @@ class TPLinkMRClient(AbstractRouter):
         assert result.group(1) != ''
 
         return result.group(1)
-
+    """
     def _req_rsa_key(self):
         '''
         Requests the RSA public key from the host
@@ -1132,7 +1128,7 @@ class TPLinkMRClient(AbstractRouter):
         assert seq.isnumeric()
 
         return nn, ee, int(seq)
-
+    """
     def _req_login(self) -> None:
         '''
         Authenticates to the host
@@ -1178,7 +1174,9 @@ class TPLinkMRClient(AbstractRouter):
             if self._logger:
                 self._logger.error(error)
             raise ClientException(error)
+    """
 
+    #@abstractmethod
     def _request(self, url, method='POST', data_str=None, encrypt=False):
         '''
         Prepares and sends an HTTP request to the host
@@ -1192,6 +1190,7 @@ class TPLinkMRClient(AbstractRouter):
 
         # add referer to request headers,
         # otherwise we get 403 Forbidden
+        headers['Host'] = self.host
         headers['Referer'] = self.host
 
         # add token to request headers,
@@ -1225,7 +1224,7 @@ class TPLinkMRClient(AbstractRouter):
 
         # decrypt the response, if needed
         if encrypt and (r.status_code == 200) and (r.text != ''):
-            return r.status_code, self._encryption.aes_decrypt(r.text)
+            return r.status_code, self._decrypt_response(r.text)
         else:
             return r.status_code, r.text
 
@@ -1242,6 +1241,7 @@ class TPLinkMRClient(AbstractRouter):
 
         return int(result.group(1))
 
+    '''
     def _prepare_data(self, data: str, is_login: bool) -> tuple[str, str]:
         encrypted_data = self._encryption.aes_encrypt(data)
         data_len = len(encrypted_data)
@@ -1250,13 +1250,25 @@ class TPLinkMRClient(AbstractRouter):
 
         # format expected raw request data
         return signature, encrypted_data
+        
+    def _decrypt_response(self, data: dict) -> dict:
+        return self._encryption.aes_decrypt(data)
+    '''
 
+    def _prepare_data(self, data: str, is_login: bool) -> tuple[str, str]:
+        return None, data
 
+    def _decrypt_response(self, data: dict) -> dict:
+        return data
+
+# TODO move to dedicated file
 class TplinkRouterProvider:
     @staticmethod
     def get_client(host: str, password: str, username: str = 'admin', logger: Logger = None,
                    verify_ssl: bool = True, timeout: int = 30) -> AbstractRouter | None:
-        for client in [TPLinkMRClient, TplinkC6V4Router, TPLinkDecoClient, TplinkRouter, TplinkC1200Router]:
+        for client in [
+            #TPLinkMRClient, # temporarily commented to avoid cross include conflict. Having this provider here prevents modularization and inheritance
+            TplinkC6V4Router, TPLinkDecoClient, TplinkRouter, TplinkC1200Router]:
             router = client(host, password, username, logger, verify_ssl, timeout)
             if router.supports():
                 return router

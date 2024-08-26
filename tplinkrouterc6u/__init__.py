@@ -2,10 +2,11 @@ from tplinkrouterc6u.client import (
     TplinkRouter,
     TplinkRouterProvider,
     TplinkC1200Router,
-    TPLinkMRClient,
+    TPLinkCGIClient,
     AbstractRouter,
     TPLinkDecoClient,
 )
+from tplinkrouterc6u.mr import TPLinkMRClient
 from tplinkrouterc6u.enum import Connection
 from tplinkrouterc6u.dataclass import (
     Firmware,

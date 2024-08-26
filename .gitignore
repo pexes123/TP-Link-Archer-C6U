@@ -1,6 +1,7 @@
 __pycache__
 .idea
 .venv
+venv
 .vscode
 *.egg-info
 build

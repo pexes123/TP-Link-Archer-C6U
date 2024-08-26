@@ -14,7 +14,9 @@ from tplinkrouterc6u.enum import Connection
 from tplinkrouterc6u.dataclass import Firmware, Status, Device, IPv4Reservation, IPv4DHCPLease, IPv4Status
 from tplinkrouterc6u.exception import ClientException, ClientError
 from abc import ABC, abstractmethod
+import pprint
 
+pp = pprint.PrettyPrinter(indent=2)
 
 class AbstractRouter(ABC):
     def __init__(self, host: str, password: str, username: str = 'admin', logger: Logger = None,
@@ -814,9 +816,10 @@ class TPLinkCGIClient(AbstractRouter):
     def get_firmware(self) -> Firmware:
         acts = [
             self.ActItem(self.ActItem.GET, 'IGD_DEV_INFO', attrs=[
-                'hardwareVersion',
-                'modelName',
-                'softwareVersion'
+                # 'hardwareVersion',
+                # 'modelName',
+                # 'softwareVersion',
+                # 'upTime'
             ])
         ]
         _, values = self.req_act(acts)
@@ -826,26 +829,49 @@ class TPLinkCGIClient(AbstractRouter):
 
         return firmware
 
+    # TOOODOOO uprateka tychto spotvorenych funkcii
+    # TOODOOOO funkcie co zeru len CGI hlavicky
+    # TOOOOOOO dict->YML->dict config pre kazdy router, podla zmysluplnosti pravidelneho diffu rozdelit na STATE a CONFIG
+    # TOOOOOOO ulozit. zresetovat, nahrat, monicqu, a nahrat 7DEA. A testovat konecne
+
     def get_status(self) -> Status:
         status = Status()
+        # '[WAN_COMMON_INTF_CFG#0,0,0,0,0,0#0,0,0,0,0,0]3,1', 'WANAccessType'
+        # '[WAN_PPP_CONN#0,0,0,0,0,0#0,0,0,0,0,0]5,0',
+        # '[WAN_L2TP_CONN#0,0,0,0,0,0#0,0,0,0,0,0]6,0',
+        # '[WAN_PPTP_CONN#0,0,0,0,0,0#0,0,0,0,0,0]7,0',
+        # '[L2_BRIDGING_ENTRY#0,0,0,0,0,0#0,0,0,0,0,0]8,1', 'bridgeName'
+        # '[WAN_IP_CONN#0,0,0,0,0,0#0,0,0,0,0,0]2,7', 'enable', 'MACAddress', 'externalIPAddress', 'defaultGateway', 'name', 'subnetMask', 'DNSServers''
+        # '[WAN_IP_CONN#0,0,0,0,0,0#0,0,0,0,0,0]4,0'
+
+        wifi = Connection.HOST_2G
         acts = [
             self.ActItem(self.ActItem.GS, 'LAN_IP_INTF', attrs=['X_TP_MACAddress', 'IPInterfaceIPAddress']),
+            #self.ActItem(self.ActItem.GS, 'WAN_IP_CONN', attrs=[]),
             self.ActItem(self.ActItem.GS, 'WAN_IP_CONN',
                          attrs=['enable', 'MACAddress', 'externalIPAddress', 'defaultGateway']),
             self.ActItem(self.ActItem.GL, 'LAN_WLAN', attrs=['enable', 'X_TP_Band']),
             self.ActItem(self.ActItem.GL, 'LAN_WLAN_GUESTNET', attrs=['enable', 'name']),
-            self.ActItem(self.ActItem.GL, 'LAN_HOST_ENTRY', attrs=[
-                'IPAddress',
-                'MACAddress',
-                'hostName',
-                'X_TP_ConnType',
-                'active',
-            ]),
-            self.ActItem(self.ActItem.GS, 'LAN_WLAN_ASSOC_DEV', attrs=[
-                'associatedDeviceMACAddress',
-                'X_TP_TotalPacketsSent',
-                'X_TP_TotalPacketsReceived',
-            ]),
+            #self.ActItem(self.ActItem.GET, 'WAN_IP_CONN', attrs=[]),
+            #self.ActItem(self.ActItem.GS, 'LAN_WLAN_ASSOC_DEV', pstack=self.WIFI_SET[wifi], attrs=[]),
+            self.ActItem(self.ActItem.GS, 'WAN_PPP_CONN_PORTMAPPING', attrs=[]),
+
+            # self.ActItem(self.ActItem.GS, 'WAN_L2TP_CONN', attrs=[]),
+            # self.ActItem(self.ActItem.GS, 'WAN_PPTP_CONN', attrs=[]),
+            # self.ActItem(self.ActItem.GS, 'L2_BRIDGING_ENTRY', attrs=[]),
+
+            # self.ActItem(self.ActItem.GL, 'LAN_HOST_ENTRY', attrs=[
+            #     'IPAddress',
+            #     'MACAddress',
+            #     'hostName',
+            #     'X_TP_ConnType',
+            #     'active',
+            # ]),
+            # self.ActItem(self.ActItem.GS, 'LAN_WLAN_ASSOC_DEV', self.WIFI_SET[wifi], attrs=[
+            #     'associatedDeviceMACAddress',
+            #     'X_TP_TotalPacketsSent',
+            #     'X_TP_TotalPacketsReceived',
+            # ]),
         ]
         _, values = self.req_act(acts)
 
@@ -875,42 +901,44 @@ class TPLinkCGIClient(AbstractRouter):
             status.guest_5g_enable = bool(int(values['3'][1]['enable']))
 
         devices = {}
-        for val in self._to_list(values.get('4')):
-            if int(val['active']) == 0:
-                continue
-            conn = self.CLIENT_TYPES.get(int(val['X_TP_ConnType']))
-            if conn is None:
-                continue
-            elif conn == Connection.WIRED:
-                status.wired_total += 1
-            elif conn.is_guest_wifi():
-                status.guest_clients_total += 1
-            elif conn.is_host_wifi():
-                status.wifi_clients_total += 1
-            devices[val['MACAddress']] = Device(conn,
-                                                macaddress.EUI48(val['MACAddress']),
-                                                ipaddress.IPv4Address(val['IPAddress']),
-                                                val['hostName'])
-
-        for val in self._to_list(values.get('5')):
-            if val['associatedDeviceMACAddress'] not in devices:
-                status.wifi_clients_total += 1
-                devices[val['associatedDeviceMACAddress']] = Device(
-                    Connection.HOST_2G,
-                    macaddress.EUI48(val['associatedDeviceMACAddress']),
-                    ipaddress.IPv4Address('0.0.0.0'),
-                    '')
-            devices[val['associatedDeviceMACAddress']].packets_sent = int(val['X_TP_TotalPacketsSent'])
-            devices[val['associatedDeviceMACAddress']].packets_received = int(val['X_TP_TotalPacketsReceived'])
-
-        status.devices = list(devices.values())
-        status.clients_total = status.wired_total + status.wifi_clients_total + status.guest_clients_total
+        # for val in self._to_list(values.get('4')):
+        #     if int(val['active']) == 0:
+        #         continue
+        #     conn = self.CLIENT_TYPES.get(int(val['X_TP_ConnType']))
+        #     if conn is None:
+        #         continue
+        #     elif conn == Connection.WIRED:
+        #         status.wired_total += 1
+        #     elif conn.is_guest_wifi():
+        #         status.guest_clients_total += 1
+        #     elif conn.is_host_wifi():
+        #         status.wifi_clients_total += 1
+        #     devices[val['MACAddress']] = Device(conn,
+        #                                         macaddress.EUI48(val['MACAddress']),
+        #                                         ipaddress.IPv4Address(val['IPAddress']),
+        #                                         val['hostName'])
+        #
+        # for val in self._to_list(values.get('5')):
+        #     if val['associatedDeviceMACAddress'] not in devices:
+        #         status.wifi_clients_total += 1
+        #         devices[val['associatedDeviceMACAddress']] = Device(
+        #             Connection.HOST_2G,
+        #             macaddress.EUI48(val['associatedDeviceMACAddress']),
+        #             ipaddress.IPv4Address('0.0.0.0'),
+        #             '')
+        #     devices[val['associatedDeviceMACAddress']].packets_sent = int(val['X_TP_TotalPacketsSent'])
+        #     devices[val['associatedDeviceMACAddress']].packets_received = int(val['X_TP_TotalPacketsReceived'])
+        #
+        # status.devices = list(devices.values())
+        # status.clients_total = status.wired_total + status.wifi_clients_total + status.guest_clients_total
 
         return status
 
     def get_ipv4_reservations(self) -> [IPv4Reservation]:
         acts = [
-            self.ActItem(5, 'LAN_DHCP_STATIC_ADDR', attrs=['enable', 'chaddr', 'yiaddr']),
+            self.ActItem(5, 'LAN_DHCP_STATIC_ADDR', attrs=[
+                # 'enable', 'chaddr', 'yiaddr'
+            ]),
         ]
         _, values = self.req_act(acts)
 
@@ -928,7 +956,9 @@ class TPLinkCGIClient(AbstractRouter):
 
     def get_ipv4_dhcp_leases(self) -> [IPv4DHCPLease]:
         acts = [
-            self.ActItem(5, 'LAN_HOST_ENTRY', attrs=['IPAddress', 'MACAddress', 'hostName', 'leaseTimeRemaining']),
+            self.ActItem(5, 'LAN_HOST_ENTRY', attrs=[
+                #'IPAddress', 'MACAddress', 'hostName', 'leaseTimeRemaining', 'X_TP_ConnType'
+            ]),
         ]
         _, values = self.req_act(acts)
 
@@ -950,6 +980,7 @@ class TPLinkCGIClient(AbstractRouter):
             self.ActItem(self.ActItem.GS, 'LAN_IP_INTF',
                          attrs=['X_TP_MACAddress', 'IPInterfaceIPAddress', 'IPInterfaceSubnetMask']),
             self.ActItem(self.ActItem.GET, 'LAN_HOST_CFG', '1,0,0,0,0,0', attrs=['DHCPServerEnable']),
+            #self.ActItem(self.ActItem.GS, 'WAN_IP_CONN', attrs=[]),
             self.ActItem(self.ActItem.GS, 'WAN_IP_CONN',
                          attrs=['enable', 'MACAddress', 'externalIPAddress', 'defaultGateway', 'name', 'subnetMask',
                                 'DNSServers']),
@@ -1033,6 +1064,10 @@ class TPLinkCGIClient(AbstractRouter):
             raise ClientError(error)
 
         result = self._merge_response(response)
+        # print(url)
+        # print(data)
+        #print((code, response))
+        #pp.pprint(result)
 
         return response, result.get('0') if len(result) == 1 and result.get('0') else result
 
@@ -1192,6 +1227,8 @@ class TPLinkCGIClient(AbstractRouter):
         # otherwise we get 403 Forbidden
         headers['Host'] = self.host
         headers['Referer'] = self.host
+        #headers['Referer'] = 'http://192.168.0.99/AEXOLAQCQKVOIKIB/userRpm/LoginRpm.htm?Save=Save'
+
 
         # add token to request headers,
         # used for CGI auth (together with JSESSIONID cookie)
@@ -1210,6 +1247,9 @@ class TPLinkCGIClient(AbstractRouter):
             # send the request
             if method == 'POST':
                 r = self.req.post(url, data=data, headers=headers, timeout=self.timeout, verify=self._verify_ssl)
+                # r = self.req.post(url, data=data, cookies={"Authorization": "Basic YWRtaW46YWRtaW4="}, headers=headers, timeout=self.timeout, verify=self._verify_ssl)
+                # r = self.req.post(url, data=data, cookies={"Authorization": "Basic YWRtaW46MjEyMzJmMjk3YTU3YTVhNzQzODk0YTBlNGE4MDFmYzM="}, headers=headers, timeout=self.timeout, verify=self._verify_ssl)
+
             elif method == 'GET':
                 r = self.req.get(url, data=data, headers=headers, timeout=self.timeout, verify=self._verify_ssl)
             else:
